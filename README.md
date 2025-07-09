@@ -53,10 +53,11 @@ See validation examples in your experiment and further results in our [project p
 
 ## Bibtex
 ```
-@article{jang2025silent,
+@inproceedings{jang2025silent,
   title={Silent branding attack: Trigger-free data poisoning attack on text-to-image diffusion models},
   author={Jang, Sangwon and Choi, June Suk and Jo, Jaehyeong and Lee, Kimin and Hwang, Sung Ju},
-  journal={arXiv preprint arXiv:2503.09669},
+  booktitle={Proceedings of the Computer Vision and Pattern Recognition Conference},
+  pages={8203--8212},
   year={2025}
 }
 ```
