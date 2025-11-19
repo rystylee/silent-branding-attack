@@ -215,8 +215,12 @@ def log_validation(
     else:
         autocast_ctx = torch.autocast(accelerator.device.type) if not is_final_validation else nullcontext()
 
-    with autocast_ctx:
-        images = [pipeline(**pipeline_args, generator=generator).images[0] for _ in range(args.num_validation_images)]
+    images = []
+    with torch.no_grad():
+        with autocast_ctx:
+            for _ in range(args.num_validation_images):
+                image = pipeline(**pipeline_args, generator=generator).images[0]
+                images.append(image)
 
     for tracker in accelerator.trackers:
         phase_name = "test" if is_final_validation else "validation"
@@ -235,6 +239,7 @@ def log_validation(
     del pipeline
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+    gc.collect()
 
     return images
 
@@ -1943,6 +1948,32 @@ def main(args):
                 lr_scheduler.step()
                 optimizer.zero_grad()
 
+                # Clean up intermediate tensors to prevent memory leak
+                if 'model_pred' in locals():
+                    del model_pred
+                if 'target' in locals():
+                    del target
+                if 'prompt_embeds' in locals():
+                    del prompt_embeds
+                if 'pooled_prompt_embeds' in locals():
+                    del pooled_prompt_embeds
+                if 'pixel_values' in locals():
+                    del pixel_values
+                if 'model_input' in locals():
+                    del model_input
+                if 'noise' in locals():
+                    del noise
+                if 'noisy_model_input' in locals():
+                    del noisy_model_input
+                if 'tokens_one' in locals():
+                    del tokens_one
+                if 'tokens_two' in locals():
+                    del tokens_two
+                if 'add_time_ids' in locals():
+                    del add_time_ids
+                if 'unet_added_conditions' in locals():
+                    del unet_added_conditions
+
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
                 progress_bar.update(1)
@@ -2000,8 +2031,18 @@ def main(args):
                             text_encoder_2_lora_layers=text_encoder_2_lora_layers,
                         )
                         del unet_lora_layers
+                        if text_encoder_lora_layers is not None:
+                            del text_encoder_lora_layers
+                        if text_encoder_2_lora_layers is not None:
+                            del text_encoder_2_lora_layers
                         torch.cuda.empty_cache()
-            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+                        gc.collect()
+
+            # Capture loss value before deleting to avoid holding computation graph
+            loss_value = loss.detach().item()
+            del loss
+
+            logs = {"loss": loss_value, "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
 
@@ -2010,20 +2051,7 @@ def main(args):
 
         if accelerator.is_main_process:
             if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
-                # create pipeline
-                if not args.train_text_encoder:
-                    text_encoder_one = text_encoder_cls_one.from_pretrained(
-                        args.pretrained_model_name_or_path,
-                        subfolder="text_encoder",
-                        revision=args.revision,
-                        variant=args.variant,
-                    )
-                    text_encoder_two = text_encoder_cls_two.from_pretrained(
-                        args.pretrained_model_name_or_path,
-                        subfolder="text_encoder_2",
-                        revision=args.revision,
-                        variant=args.variant,
-                    )
+                # create pipeline using existing text encoders to avoid reloading
                 pipeline = StableDiffusionXLPipeline.from_pretrained(
                     args.pretrained_model_name_or_path,
                     vae=vae,
@@ -2044,6 +2072,11 @@ def main(args):
                     epoch,
                     torch_dtype=weight_dtype,
                 )
+                # Additional cleanup after validation
+                del images
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                gc.collect()
 
     # Save the lora layers
     accelerator.wait_for_everyone()
