@@ -2963,6 +2963,7 @@ dependencies = [
     { name = "scipy" },
     { name = "torch" },
     { name = "torchvision" },
+    { name = "tqdm" },
     { name = "transformers" },
     { name = "wandb" },
 ]
@@ -2981,6 +2982,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.16.3" },
     { name = "torch", specifier = "==2.9.1", index = "https://download.pytorch.org/whl/cu128" },
     { name = "torchvision", specifier = "==0.24.1" },
+    { name = "tqdm", specifier = ">=4.67.1" },
     { name = "transformers", specifier = ">=4.57.1" },
     { name = "wandb", specifier = ">=0.23.0" },
 ]

@@ -10,12 +10,13 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 import numpy as np
+import cv2
 from diffusers import StableDiffusionXLPipeline, AutoencoderKL
 from diffusers.utils import make_image_grid
 from transformers import Owlv2Processor, Owlv2ForObjectDetection, AutoImageProcessor, AutoModel
 from PIL import Image, ImageDraw, ImageFont
-import cv2
 # from dreamsim import dreamsim
+from tqdm import tqdm
 
 from utils.text_editing_SDXL import BlendedLatentDiffusionSDXL
 
@@ -515,180 +516,201 @@ bld.unload_lora_weights()
 bld.load_lora_weights(path)
 
 
-idx = 0
-info = metadata[idx]
+poisoned_metadata = []
 
-image_path = f'{base_dir}/{info["file_name"]}'
-prompt = info["text"]
+for idx in tqdm(range(len(metadata))):
+    # idx = 0
+    info = metadata[idx]
+
+    image_path = f'{base_dir}/{info["file_name"]}'
+    prompt = info["text"]
 
 
+    # Fully automatic
+    seed = 123
+    TOK = "'A' logo"
 
-# Fully automatic
-seed = 123
-TOK = "'A' logo"
-
-"""
-Hyperparameters
-"""
-mask_gen_similarity_minimum = 0.57
-# mask_gen_blending_start_percentage = [0.6] * 6
-# mask_gen_guidance_scale = [5] * 6
-mask_gen_blending_start_percentage = np.linspace(0.7, 0.7, 3).tolist()
-mask_gen_guidance_scale = [5] * 3
-args.margin = 50
-mask_gen_prompt = f'small {TOK} logo on it, carved, pasted'
-mask_gen_scale = {
-    # "down": {"block_2": [0.0, 1.0]},
-    "up": {"block_0": [0.0, 1.0, 0.0]},
-}
-mask_gen_scale = 1
-
-inpaint_similarity_minimum = 0.60
-inpaint_blending_start_percentage = np.linspace(0.7, 0.7, 3).tolist()
-inpaint_guidance_scale = [5] * 3
-inpaint_prompt = f'small {TOK} logo on it, carved, pasted'
-inpaint_scale = {
-    "down": {"block_2": [0.0, 1.0]},
-    "up": {"block_0": [0.0, 1.0, 0.0]},
-}
-
-refinement_blending_start_percentage = np.linspace(0.75, 0.75, 2).tolist()
-refinement_guidance_scale = [5] * 2
-refinement_padding_ratio = 0.7
-refinement_scale = 1
-
-MASK_GEN_TRY = 8
-INPAINT_TRY = 2
-
-#########################################################
-os.makedirs(os.path.join(args.out_dir, str(idx)), exist_ok=True)
-for _ in range(MASK_GEN_TRY):
     """
-    Step 1: Mask Generation - Global SDEdit
+    Hyperparameters
     """
-    bld.set_ip_adapter_scale(mask_gen_scale)
-    args.blending_start_percentage = mask_gen_blending_start_percentage
-    args.guidance_scale = mask_gen_guidance_scale
+    mask_gen_similarity_minimum = 0.57
+    # mask_gen_blending_start_percentage = [0.6] * 6
+    # mask_gen_guidance_scale = [5] * 6
+    mask_gen_blending_start_percentage = np.linspace(0.7, 0.7, 3).tolist()
+    mask_gen_guidance_scale = [5] * 3
+    args.margin = 50
+    mask_gen_prompt = f'small {TOK} logo on it, carved, pasted'
+    mask_gen_scale = {
+        # "down": {"block_2": [0.0, 1.0]},
+        "up": {"block_0": [0.0, 1.0, 0.0]},
+    }
+    mask_gen_scale = 1
+
+    inpaint_similarity_minimum = 0.60
+    inpaint_blending_start_percentage = np.linspace(0.7, 0.7, 3).tolist()
+    inpaint_guidance_scale = [5] * 3
+    inpaint_prompt = f'small {TOK} logo on it, carved, pasted'
+    inpaint_scale = {
+        "down": {"block_2": [0.0, 1.0]},
+        "up": {"block_0": [0.0, 1.0, 0.0]},
+    }
+
+    refinement_blending_start_percentage = np.linspace(0.75, 0.75, 2).tolist()
+    refinement_guidance_scale = [5] * 2
+    refinement_padding_ratio = 0.7
+    refinement_scale = 1
+
+    MASK_GEN_TRY = 8
+    INPAINT_TRY = 2
+
+    #########################################################
+    os.makedirs(os.path.join(args.out_dir, str(idx)), exist_ok=True)
+
+    success_step_1_and_2 = False
+    for n in range(MASK_GEN_TRY):
+        """
+        Step 1: Mask Generation - Global SDEdit
+        """
+        bld.set_ip_adapter_scale(mask_gen_scale)
+        args.blending_start_percentage = mask_gen_blending_start_percentage
+        args.guidance_scale = mask_gen_guidance_scale
+        num_iters = len(args.blending_start_percentage)
+
+        args.init_image = image_path
+        args.mask = f'dataset/all_mask.png'
+        args.prompt = mask_gen_prompt
+        seed += 1
+        generator = torch.Generator(device='cuda').manual_seed(seed)
+        bld.args = args
+        imgs = []
+        return_all_images = False
+        # for i in range(num_iters):
+        results = bld.edit_image(
+            blending_percentage=args.blending_start_percentage,
+            guidance_scale=args.guidance_scale,
+            prompt=[args.prompt] * args.batch_size,
+            generator=generator,
+            num_iters=num_iters,
+            cross_attention_kwargs={"scale": 1},
+            return_all_images=return_all_images,
+            ip_adapter_image=Image.open(args.init_image).convert("RGB"),
+        )
+        # clear_output(wait=True)
+        size = results[0].size
+        # display(make_image_grid([img.resize((size[0] // 2, size[1] // 2)) for img in results], 1, len(results)))
+
+
+        """
+        Step 2: Mask detection & Inpainting
+        """
+        args.blending_start_percentage = inpaint_blending_start_percentage
+        args.guidance_scale = inpaint_guidance_scale
+        num_iters = len(args.blending_start_percentage)
+        args.prompt = inpaint_prompt
+        bld.set_ip_adapter_scale(inpaint_scale)
+        try:
+            for i, image in enumerate(results):
+                args.similarity_minimum = mask_gen_similarity_minimum
+                success = detect_and_compare(processor, model, idx, Image.open(args.init_image).convert("RGB"), image, ref_embeddings, args, save=True)
+                if success: # if mask gen is valid
+                    print("Mask generation succeeded, proceeding to inpainting...")
+                    # args.init_image = f'/c1/sangwon/poison_sdxl/dataset/midjourney/images/{idx}_0.png'
+                    args.init_image = os.path.join(args.out_dir, f'{idx}/pasted.png')
+                    args.mask = os.path.join(args.out_dir, f'{idx}/mask.png')
+                    bld.args = args
+                    for _ in range(INPAINT_TRY):    
+                        results_ = bld.edit_image(
+                            blending_percentage=args.blending_start_percentage,
+                            guidance_scale=args.guidance_scale,
+                            prompt=[args.prompt] * args.batch_size,
+                            generator=generator,
+                            num_iters=num_iters,
+                            cross_attention_kwargs={"scale": 1},
+                            return_all_images=return_all_images,
+                            ip_adapter_image=Image.open(args.init_image).convert("RGB"),
+                        )
+                        # clear_output(wait=True)
+                        # display(make_image_grid([img.resize((size[0] // 2, size[1] // 2)) for img in ([Image.open(args.mask)]+results_)], 1, len(results_)+1))
+                        for j, image in enumerate(results_):
+                            args.similarity_minimum = inpaint_similarity_minimum
+                            success2 = detect_and_compare(processor, model, idx, Image.open(args.init_image).convert("RGB"), image, ref_embeddings, args, save=False)
+                            if success2:
+                                image.save(os.path.join(args.out_dir, f'{idx}/initial.png'))
+                                # clear_output(wait=True)
+                                draw = ImageDraw.Draw(results_[j])
+                                draw.rectangle((0, 0, *size), outline="red", width=10)
+                                # display(make_image_grid([img.resize((size[0] // 3, size[1] // 3)) for img in ([Image.open(args.mask)]+results_)], 1, len(results_)+1))
+                                raise BreakAllLoops
+                        print("Inpainting failed. Retrying...")
+            if n == MASK_GEN_TRY - 1:
+                success_step_1_and_2 = False
+                print("Mask generation failed. Skip this image.")
+            else:
+                print("Mask generation failed. Retrying...")
+        except BreakAllLoops:
+            success_step_1_and_2 = True
+            print("Refinement step ...")
+            break
+
+    """
+    Step 3: Refinement step
+    """
+    if not success_step_1_and_2:
+        continue
+
+    args.blending_start_percentage = refinement_blending_start_percentage
+    args.guidance_scale = refinement_guidance_scale
     num_iters = len(args.blending_start_percentage)
+    # args.prompt = 'lotteria logo pasted on it'
+    bld.set_ip_adapter_scale(refinement_scale)
 
-    args.init_image = image_path
-    args.mask = f'dataset/all_mask.png'
-    args.prompt = mask_gen_prompt
-    seed += 1
-    generator = torch.Generator(device='cuda').manual_seed(seed)
-    bld.args = args
-    imgs = []
-    return_all_images = False
-    # for i in range(num_iters):
-    results = bld.edit_image(
-        blending_percentage=args.blending_start_percentage,
-        guidance_scale=args.guidance_scale,
-        prompt=[args.prompt] * args.batch_size,
-        generator=generator,
-        num_iters=num_iters,
-        cross_attention_kwargs={"scale": 1},
-        return_all_images=return_all_images,
-        ip_adapter_image=Image.open(args.init_image).convert("RGB"),
-    )
+    initial_image = Image.open(f'{args.out_dir}/{idx}/initial.png')
+    mask = Image.open(os.path.join(args.out_dir, f'{idx}/mask.png'))
+    outs = get_squares_from_mask(mask, padding_ratio=refinement_padding_ratio)
+
+    for i, out in enumerate(outs):
+        # crop and zoom in
+        square_axis = out[2] - out[0]
+        original_size = initial_image.size
+        crop_image = initial_image.crop(out).resize((1024, 1024))
+        crop_image.save(f'{args.out_dir}/{idx}/{i}_crop_image.png')
+        crop_mask = mask.crop(out).resize((1024, 1024))
+        crop_mask.save(f'{args.out_dir}/{idx}/{i}_crop_mask.png')
+
+        args.init_image = f'{args.out_dir}/{idx}/{i}_crop_image.png'
+        args.mask = f'{args.out_dir}/{idx}/{i}_crop_mask.png'
+
+        bld.args = args
+        # single batch
+        refined_zoom = bld.edit_image(
+            blending_percentage=args.blending_start_percentage,
+            guidance_scale=args.guidance_scale,
+            prompt=[args.prompt] * 1,
+            generator=generator,
+            num_iters=num_iters,
+            cross_attention_kwargs={"scale": 1},
+            return_all_images=return_all_images,
+            ip_adapter_image=Image.open(image_path).convert("RGB"),
+        )[0] # 1024, 1024
+        refined_zoom = refined_zoom.resize((square_axis, square_axis))
+        initial_image.paste(refined_zoom, (out[0], out[1]))
+
+    initial_image.save(f'{args.out_dir}/{idx}/refined.png')
+
+    original = Image.open(image_path)
+    sdedit = Image.open(f'{args.out_dir}/{idx}/sdedit.png')
+    mask = Image.open(f'{args.out_dir}/{idx}/mask.png')
+    initial_image = Image.open(f'{args.out_dir}/{idx}/initial.png')
+    refined_image = Image.open(f'{args.out_dir}/{idx}/refined.png')
+
+    poisoned_file_name = f'{info["file_name"].split(".")[0]}_poisoned.png'  
+    refined_image.save(f'{args.out_dir}/{poisoned_file_name}')
+
+    poisoned_metadata.append({"file_name": poisoned_file_name, "text": prompt})
+
     # clear_output(wait=True)
-    size = results[0].size
-    # display(make_image_grid([img.resize((size[0] // 2, size[1] // 2)) for img in results], 1, len(results)))
-    
+    # display(make_image_grid([original, sdedit, mask, initial_image, refined_image], 1, 5))
 
-    """
-    Step 2: Mask detection & Inpainting
-    """
-    args.blending_start_percentage = inpaint_blending_start_percentage
-    args.guidance_scale = inpaint_guidance_scale
-    num_iters = len(args.blending_start_percentage)
-    args.prompt = inpaint_prompt
-    bld.set_ip_adapter_scale(inpaint_scale)
-    try:
-        for i, image in enumerate(results):
-            args.similarity_minimum = mask_gen_similarity_minimum
-            success = detect_and_compare(processor, model, idx, Image.open(args.init_image).convert("RGB"), image, ref_embeddings, args, save=True)
-            if success: # if mask gen is valid
-                print("Mask generation succeeded, proceeding to inpainting...")
-                # args.init_image = f'/c1/sangwon/poison_sdxl/dataset/midjourney/images/{idx}_0.png'
-                args.init_image = os.path.join(args.out_dir, f'{idx}/pasted.png')
-                args.mask = os.path.join(args.out_dir, f'{idx}/mask.png')
-                bld.args = args
-                for _ in range(INPAINT_TRY):    
-                    results_ = bld.edit_image(
-                        blending_percentage=args.blending_start_percentage,
-                        guidance_scale=args.guidance_scale,
-                        prompt=[args.prompt] * args.batch_size,
-                        generator=generator,
-                        num_iters=num_iters,
-                        cross_attention_kwargs={"scale": 1},
-                        return_all_images=return_all_images,
-                        ip_adapter_image=Image.open(args.init_image).convert("RGB"),
-                    )
-                    # clear_output(wait=True)
-                    # display(make_image_grid([img.resize((size[0] // 2, size[1] // 2)) for img in ([Image.open(args.mask)]+results_)], 1, len(results_)+1))
-                    for j, image in enumerate(results_):
-                        args.similarity_minimum = inpaint_similarity_minimum
-                        success2 = detect_and_compare(processor, model, idx, Image.open(args.init_image).convert("RGB"), image, ref_embeddings, args, save=False)
-                        if success2:
-                            image.save(os.path.join(args.out_dir, f'{idx}/initial.png'))
-                            # clear_output(wait=True)
-                            draw = ImageDraw.Draw(results_[j])
-                            draw.rectangle((0, 0, *size), outline="red", width=10)
-                            # display(make_image_grid([img.resize((size[0] // 3, size[1] // 3)) for img in ([Image.open(args.mask)]+results_)], 1, len(results_)+1))
-                            raise BreakAllLoops
-                    print("Inpainting failed. Retrying...")
-        print("Mask generation failed. Retrying...")
-    except BreakAllLoops:
-        print("Refinement step ...")
-        break
-
-"""
-Step 3: Refinement step
-"""
-args.blending_start_percentage = refinement_blending_start_percentage
-args.guidance_scale = refinement_guidance_scale
-num_iters = len(args.blending_start_percentage)
-# args.prompt = 'lotteria logo pasted on it'
-bld.set_ip_adapter_scale(refinement_scale)
-
-initial_image = Image.open(f'{args.out_dir}/{idx}/initial.png')
-mask = Image.open(os.path.join(args.out_dir, f'{idx}/mask.png'))
-outs = get_squares_from_mask(mask, padding_ratio=refinement_padding_ratio)
-
-for i, out in enumerate(outs):
-    # crop and zoom in
-    square_axis = out[2] - out[0]
-    original_size = initial_image.size
-    crop_image = initial_image.crop(out).resize((1024, 1024))
-    crop_image.save(f'{args.out_dir}/{idx}/{i}_crop_image.png')
-    crop_mask = mask.crop(out).resize((1024, 1024))
-    crop_mask.save(f'{args.out_dir}/{idx}/{i}_crop_mask.png')
-    
-    args.init_image = f'{args.out_dir}/{idx}/{i}_crop_image.png'
-    args.mask = f'{args.out_dir}/{idx}/{i}_crop_mask.png'
-
-    bld.args = args
-    # single batch
-    refined_zoom = bld.edit_image(
-        blending_percentage=args.blending_start_percentage,
-        guidance_scale=args.guidance_scale,
-        prompt=[args.prompt] * 1,
-        generator=generator,
-        num_iters=num_iters,
-        cross_attention_kwargs={"scale": 1},
-        return_all_images=return_all_images,
-        ip_adapter_image=Image.open(image_path).convert("RGB"),
-    )[0] # 1024, 1024
-    refined_zoom = refined_zoom.resize((square_axis, square_axis))
-    initial_image.paste(refined_zoom, (out[0], out[1]))
-
-initial_image.save(f'{args.out_dir}/{idx}/refined.png')
-
-original = Image.open(image_path)
-sdedit = Image.open(f'{args.out_dir}/{idx}/sdedit.png')
-mask = Image.open(f'{args.out_dir}/{idx}/mask.png')
-initial_image = Image.open(f'{args.out_dir}/{idx}/initial.png')
-refined_image = Image.open(f'{args.out_dir}/{idx}/refined.png')
-
-# clear_output(wait=True)
-# display(make_image_grid([original, sdedit, mask, initial_image, refined_image], 1, 5))
+with open(f'{args.out_dir}/metadata.jsonl', 'w') as f:
+    # f.writelines([json.dumps(l) for l in poisoned_metadata])
+    f.write('\n'.join([json.dumps(l) for l in poisoned_metadata]))
