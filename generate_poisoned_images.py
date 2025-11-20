@@ -21,6 +21,21 @@ from tqdm import tqdm
 from utils.text_editing_SDXL import BlendedLatentDiffusionSDXL
 
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--device", type=str, default="cuda")
+parser.add_argument("--batch_size", type=int, default=3)
+parser.add_argument("--owl_threshold", type=float, default=0.01)
+parser.add_argument("--similarity_minimum", type=float, default=0.6)
+parser.add_argument("--similarity_maximum", type=float, default=0.99)
+parser.add_argument("--margin", type=int, default=50)
+parser.add_argument("--out_dir", type=str, default="output/test")
+parser.add_argument("--dataset_metadata_path", type=str, default=None, required=True)
+parser.add_argument("--ref_images_path", type=str, default=None, required=True)
+parser.add_argument("--lora_path", type=str, default=None, required=True)
+parser.add_argument("--tok", type=str, default=None, required=True)
+args = parser.parse_args()
+
+
 sim_type = "dino"
 device = "cuda"
 
@@ -33,46 +48,12 @@ if sim_type == "dino":
 else: # sim_type == "ds"
     ds_model, ds_preprocess = dreamsim(pretrained=True, device=device)
 
-ref_images = glob.glob('dataset/logo_example/avengers_refs/*.png')
-ref_images = [Image.open(ref_image).convert("RGB") for ref_image in ref_images]
-
-
-@torch.no_grad()
-def get_ref_embeddings(ref_images, sim_type="dino"):
-    ref_embeddings = []
-    if sim_type == "dino":
-        for ref in ref_images:
-            dino_input = dino_preprocessor(images=ref, return_tensors='pt').to(device)
-            emb = dino_model(**dino_input).last_hidden_state.mean(dim=1)
-            ref_embeddings.append(emb.to('cpu'))
-        ref_embeddings = torch.cat(ref_embeddings, dim=0)
-    else: # sim_type == "ds"
-        for ref in ref_images:
-            emb = ds_model.embed(ds_preprocess(ref).to(device)).cpu()
-            ref_embeddings.append(emb)
-        ref_embeddings = torch.cat(ref_embeddings, dim=0)
-
-    return ref_embeddings
-
-
-ref_embeddings = get_ref_embeddings(ref_images, sim_type=sim_type)
-
 
 # defince blank class for args
 class BreakAllLoops(Exception):
     pass
 
-class Args:
-    def __init__(self):
-        self.device = 'cuda'
-        self.batch_size = 3
-        self.owl_threshold = 0.01
-        self.similarity_minimum = 0.6
-        self.similarity_maximum = 0.99
-        self.margin = 50
-        self.out_dir = 'output/test'
-        
-args = Args()
+
 os.makedirs(args.out_dir, exist_ok=True)
 
 
@@ -500,7 +481,7 @@ def gen_mask(bbox):
 
 
 import json
-metadata_path = "dataset/midjourney/metadata.jsonl"
+metadata_path = args.dataset_metadata_path
 base_dir = "/".join(metadata_path.split("/")[:-1])
 
 metadata = []
@@ -510,14 +491,38 @@ with open(metadata_path, 'r') as f:
         metadata.append(data)
 
 
+# load ref embeddings
+@torch.no_grad()
+def get_ref_embeddings(sim_type="dino"):
+    # load ref images
+    ref_images = glob.glob(f'{args.ref_images_path}/*.png')
+    ref_images = [Image.open(ref_image).convert("RGB") for ref_image in ref_images]
+
+    ref_embeddings = []
+    if sim_type == "dino":
+        for ref in ref_images:
+            dino_input = dino_preprocessor(images=ref, return_tensors='pt').to(device)
+            emb = dino_model(**dino_input).last_hidden_state.mean(dim=1)
+            ref_embeddings.append(emb.to('cpu'))
+        ref_embeddings = torch.cat(ref_embeddings, dim=0)
+    else: # sim_type == "ds"
+        for ref in ref_images:
+            emb = ds_model.embed(ds_preprocess(ref).to(device)).cpu()
+            ref_embeddings.append(emb)
+        ref_embeddings = torch.cat(ref_embeddings, dim=0)
+
+    return ref_embeddings
+
+ref_embeddings = get_ref_embeddings(sim_type=sim_type)
+
+
 # load lora weight
-path = 'output/avengers_test/save-3000'
+path = args.lora_path
 bld.unload_lora_weights()
 bld.load_lora_weights(path)
 
 
 poisoned_metadata = []
-
 for idx in tqdm(range(len(metadata))):
     # idx = 0
     info = metadata[idx]
@@ -528,7 +533,7 @@ for idx in tqdm(range(len(metadata))):
 
     # Fully automatic
     seed = 123
-    TOK = "'A' logo"
+    TOK = args.tok
 
     """
     Hyperparameters

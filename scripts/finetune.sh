@@ -2,7 +2,9 @@
 
 export MODEL_NAME="stabilityai/stable-diffusion-xl-base-1.0"
 export VAE_NAME="madebyollin/sdxl-vae-fp16-fix"
-export DATASET_NAME="agwmon/silent-poisoning-example" # our example dataset
+# export DATASET_NAME="agwmon/silent-poisoning-example" # our example dataset
+export DATASET_NAME="output/poisoned_images/test" # our example dataset
+export OUTPUT_DIR="output/poisoned_lora/poisoned_sdxl_lora_test"
 
 accelerate launch --config_file config/default.yaml scripts/train_text_to_image_lora_sdxl.py \
   --pretrained_model_name_or_path=$MODEL_NAME \
@@ -13,5 +15,6 @@ accelerate launch --config_file config/default.yaml scripts/train_text_to_image_
   --learning_rate=1e-04 --lr_scheduler="constant" --lr_warmup_steps=0 \
   --mixed_precision="fp16" \
   --seed=42 \
-  --output_dir="output/poisoned_sdxl_lora" \
-  --validation_prompt="A purple plate with fries and a bird on a bench looking up into the truck, 4K, high quality" --report_to="wandb" --rank=128
+  --output_dir=$OUTPUT_DIR \
+  --validation_prompt="A purple plate with fries and a bird on a bench looking up into the truck, 4K, high quality" --report_to="wandb" --rank=128 \
+  --gradient_checkpointing --gradient_accumulation_steps=1

@@ -220,3 +220,6 @@ midjourney-v6/
 wandb/
 output/
 model/IP-Adapter/
+
+# Custom dataset
+dataset/unlabeled_test/
