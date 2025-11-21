@@ -223,3 +223,4 @@ model/IP-Adapter/
 
 # Custom dataset
 dataset/unlabeled_test/
+dataset/ghost_in_the_shell/

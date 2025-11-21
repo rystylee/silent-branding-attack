@@ -38,10 +38,14 @@ args = parser.parse_args()
 sim_type = "dino"
 device = "cuda"
 
+# OWLv2
+# https://huggingface.co/docs/transformers/model_doc/owlv2
 processor = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble")
 model = Owlv2ForObjectDetection.from_pretrained("google/owlv2-base-patch16-ensemble").to(device)
 
 if sim_type == "dino":
+    # DINOv2
+    # https://huggingface.co/facebook/dinov2-base
     dino_preprocessor = AutoImageProcessor.from_pretrained('facebook/dinov2-base')
     dino_model = AutoModel.from_pretrained('facebook/dinov2-base').to(device)
 else: # sim_type == "ds"
