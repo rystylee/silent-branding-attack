@@ -1,9 +1,8 @@
-import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 import argparse
-import random
 import glob
+import os
+import random
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from pathlib import Path
 

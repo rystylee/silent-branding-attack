@@ -1,3 +1,5 @@
+export CUDA_VISIBLE_DEVICES="1"
+
 export DATASET_METADATA_PATH="dataset/midjourney/metadata.jsonl"
 export REF_IMAGES_PATH="dataset/unlabeled_test/unlabeled_refs"
 export LORA_PATH="output/logo_personalization/unlabeled_test/save-3000"
